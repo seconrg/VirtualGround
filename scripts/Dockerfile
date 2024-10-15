@@ -46,8 +46,12 @@ ADD https://api.github.com/repos/VoltLang/Charge/git/refs/heads/master version-C
 RUN git clone https://github.com/VoltLang/Charge.git
 
 # We do this ADD to redo following steps if new commits has been added.
-ADD https://api.github.com/repos/Wallbraker/VirtualGround/git/refs/heads/main version-VirtualGround.json
-RUN git clone --recursive https://github.com/Wallbraker/VirtualGround.git
+# ADD https://api.github.com/repos/Wallbraker/VirtualGround/git/refs/heads/main version-VirtualGround.json
+# RUN git clone --recursive https://github.com/Wallbraker/VirtualGround.git
+RUN mkdir $HOME/volt/VirtualGround
+COPY ./ $HOME/volt/VirtualGround
+
+RUN ls $HOME/volt/VirtualGround
 
 # Do a initial build
 RUN battery config Volta Watt Charge VirtualGround && \

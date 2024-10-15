@@ -83,6 +83,7 @@ struct OpenXR
 	frameID: i64;
 
 	views: View[];
+	views2: View[];
 
 	updateActions: dg(XrTime) bool;
 

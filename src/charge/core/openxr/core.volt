@@ -588,6 +588,8 @@ fn createViewsHeadless(ref oxr: OpenXR) bool
 
 	oxr.views = new .oxr.View[](oxr.viewConfigs.length);
 
+	oxr.views2 = new .oxr.View[](oxr.viewConfigs.length);
+
 	return true;
 }
 
@@ -833,9 +835,81 @@ fn createViewsGL(ref oxr: OpenXR) bool
 	}
 
 	oxr.views = new .oxr.View[](oxr.viewConfigs.length);
-
+    
 	foreach(i, ref viewConfig; oxr.viewConfigs) {
 		view := &oxr.views[i];
+		view.width = viewConfig.recommendedImageRectWidth;
+		view.height = viewConfig.recommendedImageRectHeight;
+
+		swapchainCreateInfo: XrSwapchainCreateInfo;
+		swapchainCreateInfo.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;
+		swapchainCreateInfo.arraySize = 1;
+		swapchainCreateInfo.format = GL_SRGB8_ALPHA8;
+		swapchainCreateInfo.width = viewConfig.recommendedImageRectWidth;
+		swapchainCreateInfo.height = viewConfig.recommendedImageRectHeight;
+		swapchainCreateInfo.mipCount = 1;
+		swapchainCreateInfo.faceCount = 1;
+		swapchainCreateInfo.sampleCount = 1;
+		swapchainCreateInfo.usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+
+		ret = xrCreateSwapchain(oxr.session, &swapchainCreateInfo, &view.swapchains.texture);
+		if (ret != XR_SUCCESS) {
+			oxr.log("xrCreateSwapchain failed!");
+			return false;
+		}
+
+		ret = enumSwapchainImages(ref oxr, view.swapchains.texture, out view.textures);
+		if (ret != XR_SUCCESS) {
+			oxr.log("xrCreateSwapchain failed!");
+			return false;
+		}
+
+		if (oxr.enabled.XR_KHR_composition_layer_depth) {
+			swapchainCreateInfo.format = GL_DEPTH_COMPONENT32F;
+			swapchainCreateInfo.usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+			ret = xrCreateSwapchain(oxr.session, &swapchainCreateInfo, &view.swapchains.depth);
+			if (ret != XR_SUCCESS) {
+				oxr.log("xrCreateSwapchain failed!");
+				return false;
+			}
+
+			ret = enumSwapchainImages(ref oxr, view.swapchains.depth, out view.depths);
+			if (ret != XR_SUCCESS) {
+				oxr.log("xrCreateSwapchain failed!");
+				return false;
+			}
+		} else {
+			glGenTextures(1, &view.depth);
+			glBindTexture(GL_TEXTURE_2D, view.depth);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, cast(GLsizei)view.width, cast(GLsizei)view.height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, null);
+		}
+
+		view.targets = new gfx.Target[](view.textures.length);
+		foreach (k, ref target; view.targets) {
+			fbo: GLuint;
+			glGenFramebuffers(1, &fbo);
+			glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, view.textures[k], 0);
+			if (oxr.enabled.XR_KHR_composition_layer_depth) {
+				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, view.depths[k], 0);
+			} else {
+				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, view.depth, 0);
+			}
+			name := new "openxr/view/${i}/${k}";
+			target = gfx.ExtTarget.make(name, fbo, view.width, view.height);
+		}
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+
+	oxr.views2 = new .oxr.View[](oxr.viewConfigs.length);
+    
+	foreach(i, ref viewConfig; oxr.viewConfigs) {
+		view := &oxr.views2[i];
 		view.width = viewConfig.recommendedImageRectWidth;
 		view.height = viewConfig.recommendedImageRectHeight;
 
@@ -1019,6 +1093,10 @@ fn oneLoop(ref oxr: OpenXR,
 		oxr.acquireAndWaitViewImage(ref view);
 	}
 
+	foreach (ref view; oxr.views2) {
+		oxr.acquireAndWaitViewImage(ref view);
+	}
+
 	ret = oxr.getViewLocation(oxr.stageSpace, predictedDisplayTime);
 	if (ret != XR_SUCCESS) {
 		// Already logged.
@@ -1081,11 +1159,73 @@ fn oneLoop(ref oxr: OpenXR,
 		depthViews[i].farZ = 256.0;  // Hardcoded
 	}
 
+
+	depthViews2: XrCompositionLayerDepthInfoKHR[2];
+	layerViews2: XrCompositionLayerProjectionView[2];
+
+	// This is where we render each view.
+	foreach (i, ref view; oxr.views2) {
+		viewInfo: gfx.ViewInfo;
+		viewInfo.validFov = true;
+		viewInfo.validLocation = true;
+		viewInfo.fov = view.location.fov;
+		viewInfo.position = view.location.position;
+		viewInfo.rotation = view.location.orientation;
+
+		gfx.glCheckError();
+
+		target := view.targets[view.current_index];
+		target.bind(defTarget);
+		glViewport(0, 0, cast(GLsizei)view.width, cast(GLsizei)view.height);
+
+		gfx.glCheckError();
+
+		// This is where we render!
+		renderViewDg(target, ref viewInfo);
+
+		gfx.glCheckError();
+
+		view.current_index = 0xffff_ffff_u32;
+
+		layerViews2[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+		layerViews2[i].pose = view.location.oxr.pose;
+		layerViews2[i].fov = view.location.oxr.fov;
+		layerViews2[i].subImage.swapchain = view.swapchains.texture;
+		layerViews2[i].subImage.imageRect.offset.x = 0;
+		layerViews2[i].subImage.imageRect.offset.y = 0;
+		layerViews2[i].subImage.imageRect.extent.width = cast(i32)view.width;
+		layerViews2[i].subImage.imageRect.extent.height = cast(i32)view.height;
+
+		if (view.swapchains.depth is null) {
+			continue;
+		}
+
+		layerViews2[i].next = cast(void*)&depthViews2[i];
+		depthViews2[i].type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR;
+		depthViews2[i].subImage.swapchain = view.swapchains.depth;
+		depthViews2[i].subImage.imageRect.offset.x = 0;
+		depthViews2[i].subImage.imageRect.offset.y = 0;
+		depthViews2[i].subImage.imageRect.extent.width = cast(i32)view.width;
+		depthViews2[i].subImage.imageRect.extent.height = cast(i32)view.height;
+		depthViews2[i].minDepth = 0.0f;
+		depthViews2[i].maxDepth = 1.0f;
+		depthViews2[i].nearZ = 0.05f; // Hardcoded
+		depthViews2[i].farZ = 256.0;  // Hardcoded
+	}
+
+
 	// Release the swapchains here.
 	releaseInfo: XrSwapchainImageReleaseInfo;
 	releaseInfo.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
 
 	foreach (ref view; oxr.views) {
+		xrReleaseSwapchainImage(view.swapchains.texture, &releaseInfo);
+		if (view.swapchains.depth) {
+			xrReleaseSwapchainImage(view.swapchains.depth, &releaseInfo);
+		}
+	}
+
+	foreach (ref view; oxr.views2) {
 		xrReleaseSwapchainImage(view.swapchains.texture, &releaseInfo);
 		if (view.swapchains.depth) {
 			xrReleaseSwapchainImage(view.swapchains.depth, &releaseInfo);
@@ -1104,9 +1244,19 @@ fn oneLoop(ref oxr: OpenXR,
 	layer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
 	layer.layerFlags |= XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
 
+	layer2: XrCompositionLayerProjection;
+	layer2.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+	layer2.viewCount = cast(u32)layerViews2.length;
+	layer2.views = layerViews2.ptr;
+	layer2.space = oxr.stageSpace;
+	layer2.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+	layer2.layerFlags |= XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+
 	countLayers: u32;
-	layers: XrCompositionLayerBaseHeader*[2];
+	layers: XrCompositionLayerBaseHeader*[3];
 	layers[countLayers++] = cast(XrCompositionLayerBaseHeader*)&layer;
+
+    layers[countLayers++] = cast(XrCompositionLayerBaseHeader*)&layer2;
 
 	quad: XrCompositionLayerQuad;
 	if (oxr.quadHack.active) {
