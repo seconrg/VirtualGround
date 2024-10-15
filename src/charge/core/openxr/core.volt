@@ -1388,5 +1388,9 @@ fn getViewLocation(ref oxr: OpenXR, baseSpace: XrSpace, predictedDisplayTime: Xr
 		view.location.oxr = views[i];
 	}
 
+	foreach (i, ref view; oxr.views2) {
+		view.location.oxr = views[i];
+	}
+
 	return XR_SUCCESS;
 }
