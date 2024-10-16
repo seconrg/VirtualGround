@@ -390,8 +390,6 @@ public:
 	mSquareBuf: gfx.SimpleBuffer;
 
 	// Text rendering stuff.
-	mGrid : tui.Grid;
-	mGridScale: f32 = 0.005f;
 
 
 public:
@@ -435,7 +433,6 @@ public:
 
 		setupQuad();
 
-		mGrid = new tui.Grid(GLYPH_NUM_WIDTH, GLYPH_NUM_HEIGHT);
 	}
 
 	fn close()
@@ -470,19 +467,13 @@ public:
 		gfx.reference(ref texWhiteArray, null);
 		gfx.reference(ref mSquareBuf, null);
 
-		mGrid.close();
-		mGrid = null;
 	}
 
 	fn renderPrepare()
 	{
 		s: text.StringSink;
-		mGrid.reset();
-
-		tui.makeFrameSingle(mGrid, 0, 0, GLYPH_NUM_WIDTH, GLYPH_NUM_HEIGHT);
 		s.sink("FrameID: ");
 		text.vrt_format_i64(s.sink, gOpenXR.frameID);
-		tui.makeCenteredText(mGrid, 0, 1, GLYPH_NUM_WIDTH, s.borrowUnsafe());
 
 		verts: VoxelBufferBuilder.LineVertex[FrustumVertsNum];
 
@@ -499,7 +490,6 @@ public:
 			ow := ori.w.prettyF32();
 
 			str := new "x: ${px}, y: ${py}, z: ${pz}\nx: ${ox}, y: ${oy}, z: ${oz}, w: ${ow}";
-			tui.makeText(mGrid, 2, 2 + 2 * cast(i32)i, str);
 
 			// Don't draw fov in non-headless mode.
 			if (!gOpenXR.headless) {
@@ -609,8 +599,6 @@ public:
 
 		// Place it 1.5m in front of the view.
 		pos += rot * math.Vector3f.opCall(0.0f, 0.0f, -1.5f);
-
-		mGrid.draw(ref vp, ref pos, ref rot, mGridScale);
 	}
 
 	fn drawSquare(ref vp: math.Matrix4x4d)
